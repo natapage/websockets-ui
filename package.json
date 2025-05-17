@@ -5,17 +5,29 @@
     "main": "index.js",
     "type": "module",
     "scripts": {
-        "start": "node ./index.js",
-        "start:dev": "nodemon ./index.js",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "start": "tsx ./index.ts",
+        "lint": "eslint . --ext .ts,.tsx",
+        "format": "prettier --write ."
     },
     "author": "Andrei Auchynnikau",
     "keywords": [],
     "license": "ISC",
     "devDependencies": {
-        "nodemon": "^2.0.16"
+        "@types/ws": "^8.18.1",
+        "@typescript-eslint/eslint-plugin": "^7.18.0",
+        "@typescript-eslint/parser": "^7.18.0",
+        "eslint": "^8.56.0",
+        "eslint-config-prettier": "^9.1.0",
+        "eslint-plugin-import": "^2.29.1",
+        "eslint-plugin-unused-imports": "^3.1.0",
+        "nodemon": "^2.0.16",
+        "prettier": "^3.2.5",
+        "tsx": "^4.19.4"
     },
     "dependencies": {
+        "ts-node": "^10.9.1",
+        "typescript": "^5.2.2",
+        "uuid": "^11.1.0",
         "ws": "^8.8.0"
     }
 }
