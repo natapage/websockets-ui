@@ -2,19 +2,16 @@ import { db } from '../db/inmemory';
 import { v4 as uuidv4 } from 'uuid';
 import { getWinnersTable, updateWinnersTable } from '../db/winners';
 import { createRoom, joinRoom, getRooms, removeRoom } from '../db/rooms';
-import {
-    createGame,
-    addPlayerShips,
-    handleAttack,
-    handleRandomAttack,
-    getGameById,
-} from '../game/game';
+import { addPlayerShips, handleAttack, handleRandomAttack, getGameById } from '../game/game';
 
 const BOT_NAME = 'Bot';
 const BOT_PASSWORD = 'bot_secret';
 
 function send(ws: any, msg: any): void {
-    const safeMsg = { ...msg, data: JSON.stringify(msg.data ?? '') };
+    const safeMsg = {
+        ...msg,
+        data: typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data ?? ''),
+    };
     ws.send(JSON.stringify(safeMsg));
 }
 
@@ -29,6 +26,21 @@ function broadcastAll(wss: any, msg: any): void {
     wss.clients.forEach((client: any) => {
         if (client.readyState === 1) client.send(JSON.stringify(safeMsg));
     });
+}
+
+function logUpdateWinners() {
+    const winners = getWinnersTable();
+    const msg = {
+        type: 'update_winners',
+        data: Array.isArray(winners)
+            ? winners.map((w: any) => ({
+                  name: w.name,
+                  wins: w.wins,
+              }))
+            : [],
+        id: 0,
+    };
+    console.log(msg);
 }
 
 type Ship = {
@@ -107,16 +119,18 @@ export function handleWSConnection(ws: any, wss: any): void {
 
         try {
             req = JSON.parse(message);
-        } catch {
+        } catch (err) {
+            console.error('Failed to parse incoming message:', err);
             return;
         }
 
         let { type, data } = req;
 
-        if (typeof data === 'string') {
+        if (typeof data === 'string' && data.trim() !== '') {
             try {
                 data = JSON.parse(data);
-            } catch {
+            } catch (err) {
+                console.error('Failed to parse data field:', err);
             }
         }
 
@@ -146,6 +160,7 @@ export function handleWSConnection(ws: any, wss: any): void {
                 broadcastAll(wss, { type: 'update_room', data: getRooms(), id: 0 });
 
                 broadcastAll(wss, { type: 'update_winners', data: getWinnersTable(), id: 0 });
+                logUpdateWinners();
 
                 break;
             }
@@ -173,7 +188,22 @@ export function handleWSConnection(ws: any, wss: any): void {
                 if (!room) break;
 
                 if (room.users.length === 2) {
-                    const game = createGame(room.users);
+                    const game = {
+                        id: uuidv4(),
+                        players: room.users.map((u: any) => ({
+                            id: u.index,
+                            ws: u.ws,
+                            ships: [],
+                            isBot: !!u.isBot,
+                            board: Array(10)
+                                .fill(0)
+                                .map(() => Array(10).fill(0)),
+                            hits: [],
+                        })),
+                        currentPlayer: room.users[0].index,
+                        finished: false,
+                    };
+                    db.games.push(game);
                     room.users.forEach((u: any, idx: number) => {
                         if (!u || !u.ws) return;
                         send(u.ws, {
@@ -262,21 +292,35 @@ export function handleWSConnection(ws: any, wss: any): void {
 
                 const isSingle = game.players.some((p: any) => p.isBot);
 
+                const sendAttackMsg = (
+                    wsTarget: any,
+                    pos: { x: number; y: number },
+                    status: string,
+                ) => {
+                    send(wsTarget, {
+                        type: 'attack',
+                        data: {
+                            position: pos,
+                            currentPlayer: indexPlayer,
+                            status,
+                        },
+                        id: 0,
+                    });
+                };
+
                 if (isSingle) {
                     const realPlayer = game.players.find((p: any) => !p.isBot);
                     const bot = game.players.find((p: any) => p.isBot);
 
                     if (!realPlayer || !bot) break;
 
-                    send(realPlayer.ws, {
-                        type: 'attack',
-                        data: {
-                            position: { x, y },
-                            currentPlayer: indexPlayer,
-                            status: result.status,
-                        },
-                        id: 0,
-                    });
+                    sendAttackMsg(realPlayer.ws, { x, y }, result.status);
+
+                    if (result.status === 'killed' && result.killedArea) {
+                        for (const cell of result.killedArea) {
+                            sendAttackMsg(realPlayer.ws, cell, 'miss');
+                        }
+                    }
 
                     if (result.winPlayer) {
                         send(realPlayer.ws, {
@@ -285,13 +329,22 @@ export function handleWSConnection(ws: any, wss: any): void {
                             id: 0,
                         });
 
-                        updateWinnersTable(result.winPlayer);
+                        const winnerUser = db.users.find((u: any) => u.index === result.winPlayer);
+
+                        if (!winnerUser) {
+                            console.error('No user found for winPlayer id:', result.winPlayer);
+                        } else {
+                            const winnerName = winnerUser.name;
+
+                            updateWinnersTable(winnerName);
+                        }
 
                         broadcastAll(wss, {
                             type: 'update_winners',
                             data: getWinnersTable(),
                             id: 0,
                         });
+                        logUpdateWinners();
 
                         break;
                     }
@@ -322,15 +375,13 @@ export function handleWSConnection(ws: any, wss: any): void {
                             const botResult = handleAttack(game, bot.id, bx, by);
 
                             if (realPlayer) {
-                                send(realPlayer.ws, {
-                                    type: 'attack',
-                                    data: {
-                                        position: { x: bx, y: by },
-                                        currentPlayer: bot.id,
-                                        status: botResult.status,
-                                    },
-                                    id: 0,
-                                });
+                                sendAttackMsg(realPlayer.ws, { x: bx, y: by }, botResult.status);
+
+                                if (botResult.status === 'killed' && botResult.killedArea) {
+                                    for (const cell of botResult.killedArea) {
+                                        sendAttackMsg(realPlayer.ws, cell, 'miss');
+                                    }
+                                }
                             }
 
                             if (botResult.winPlayer) {
@@ -342,13 +393,28 @@ export function handleWSConnection(ws: any, wss: any): void {
                                     });
                                 }
 
-                                updateWinnersTable(botResult.winPlayer);
+                                const winnerUser = db.users.find(
+                                    (u: any) => u.index === botResult.winPlayer,
+                                );
+
+                                if (!winnerUser) {
+                                    console.error(
+                                        'No user found for winPlayer id:',
+                                        botResult.winPlayer,
+                                    );
+                                } else {
+                                    const winnerName = winnerUser.name;
+                                    console.log('Winner name to updateWinnersTable:', winnerName);
+
+                                    updateWinnersTable(winnerName);
+                                }
 
                                 broadcastAll(wss, {
                                     type: 'update_winners',
                                     data: getWinnersTable(),
                                     id: 0,
                                 });
+                                logUpdateWinners();
 
                                 return;
                             }
@@ -368,22 +434,19 @@ export function handleWSConnection(ws: any, wss: any): void {
                         send(realPlayer.ws, {
                             type: 'turn',
                             data: { currentPlayer: realPlayer.id },
-                            id: 0,
                         });
                     }
                 } else {
                     game.players.forEach((p: any) => {
                         if (!p || !p.ws) return;
 
-                        send(p.ws, {
-                            type: 'attack',
-                            data: {
-                                position: { x, y },
-                                currentPlayer: indexPlayer,
-                                status: result.status,
-                            },
-                            id: 0,
-                        });
+                        sendAttackMsg(p.ws, { x, y }, result.status);
+
+                        if (result.status === 'killed' && result.killedArea) {
+                            for (const cell of result.killedArea) {
+                                sendAttackMsg(p.ws, cell, 'miss');
+                            }
+                        }
                     });
 
                     if (result.status === 'miss') {
@@ -409,13 +472,23 @@ export function handleWSConnection(ws: any, wss: any): void {
                             });
                         });
 
-                        updateWinnersTable(result.winPlayer);
+                        const winnerUser = db.users.find((u: any) => u.index === result.winPlayer);
+
+                        if (!winnerUser) {
+                            console.error('No user found for winPlayer id:', result.winPlayer);
+                        } else {
+                            const winnerName = winnerUser.name;
+                            updateWinnersTable(winnerName);
+
+                            console.log('Winners table after update:', getWinnersTable());
+                        }
 
                         broadcastAll(wss, {
                             type: 'update_winners',
                             data: getWinnersTable(),
                             id: 0,
                         });
+                        logUpdateWinners();
                     }
                 }
 
@@ -445,6 +518,27 @@ export function handleWSConnection(ws: any, wss: any): void {
                         },
                         id: 0,
                     });
+
+                    if (p.ws === ws)
+                        res.data = {
+                            position: result.position,
+                            currentPlayer: indexPlayer,
+                            status: result.status,
+                        };
+
+                    if (result.status === 'killed' && result.killedArea) {
+                        for (const cell of result.killedArea) {
+                            send(p.ws, {
+                                type: 'attack',
+                                data: {
+                                    position: cell,
+                                    currentPlayer: indexPlayer,
+                                    status: 'miss',
+                                },
+                                id: 0,
+                            });
+                        }
+                    }
                 });
 
                 if (result.status === 'miss') {
@@ -454,7 +548,6 @@ export function handleWSConnection(ws: any, wss: any): void {
                         send(p.ws, {
                             type: 'turn',
                             data: { currentPlayer: game.currentPlayer },
-                            id: 0,
                         });
                     });
                 }
@@ -470,9 +563,17 @@ export function handleWSConnection(ws: any, wss: any): void {
                         });
                     });
 
-                    updateWinnersTable(result.winPlayer);
+                    const winnerUser = db.users.find((u: any) => u.index === result.winPlayer);
+
+                    if (!winnerUser) {
+                        console.error('No user found for winPlayer id:', result.winPlayer);
+                    } else {
+                        const winnerName = winnerUser.name;
+                        updateWinnersTable(winnerName);
+                    }
 
                     broadcastAll(wss, { type: 'update_winners', data: getWinnersTable(), id: 0 });
+                    logUpdateWinners();
                 }
 
                 break;
@@ -481,7 +582,6 @@ export function handleWSConnection(ws: any, wss: any): void {
             case 'single_play': {
                 const roomId = uuidv4();
                 const gameId = uuidv4();
-                const playerId = uuidv4();
                 const botId = uuidv4();
 
                 const user = db.users.find((u: any) => u.ws === ws);
@@ -512,7 +612,7 @@ export function handleWSConnection(ws: any, wss: any): void {
                     id: gameId,
                     players: [
                         {
-                            id: playerId,
+                            id: user.index,
                             ws,
                             ships: [],
                             isBot: false,
@@ -532,7 +632,7 @@ export function handleWSConnection(ws: any, wss: any): void {
                             hits: [],
                         },
                     ],
-                    currentPlayer: playerId,
+                    currentPlayer: user.index,
                     finished: false,
                 };
 
@@ -542,7 +642,7 @@ export function handleWSConnection(ws: any, wss: any): void {
 
                 send(ws, {
                     type: 'create_game',
-                    data: { idGame: gameId, idPlayer: playerId },
+                    data: { idGame: gameId, idPlayer: user.index },
                     id: 0,
                 });
 
