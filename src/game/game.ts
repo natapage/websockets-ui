@@ -33,6 +33,30 @@ export function getShipCells(ship: Ship): Position[] {
     return cells;
 }
 
+export function getAroundCells(ship: Ship): Position[] {
+    const cells = getShipCells(ship);
+    const around: Position[] = [];
+    for (const cell of cells) {
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const tx = cell.x + dx;
+                const ty = cell.y + dy;
+
+                if (
+                    tx >= 0 && tx < 10 &&
+                    ty >= 0 && ty < 10 &&
+                    !cells.some(c => c.x === tx && c.y === ty)
+                ) {
+                    if (!around.some(c => c.x === tx && c.y === ty)) {
+                        around.push({ x: tx, y: ty });
+                    }
+                }
+            }
+        }
+    }
+    return around;
+}
+
 export function createGame(users: { ws: WebSocket; index: string }[]): Game {
     const game: Game = {
         id: uuidv4(),
@@ -94,21 +118,11 @@ function isShipKilled(board: number[][], ships: Ship[], x: number, y: number): S
 
 function markKilledArea(board: number[][], ship: Ship): Position[] {
     const marked: Position[] = [];
-    for (const cell of getShipCells(ship)) {
-        let sx = cell.x;
-        let sy = cell.y;
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                let tx = sx + dx;
-                let ty = sy + dy;
-
-                if (tx >= 0 && tx < 10 && ty >= 0 && ty < 10) {
-                    if (board[ty][tx] === 0) {
-                        board[ty][tx] = 3;
-                        marked.push({ x: tx, y: ty });
-                    }
-                }
-            }
+    const around = getAroundCells(ship);
+    for (const cell of around) {
+        if (board[cell.y][cell.x] === 0) {
+            board[cell.y][cell.x] = 3;
+            marked.push({ x: cell.x, y: cell.y });
         }
     }
     return marked;
@@ -123,6 +137,7 @@ export function handleAttack(
     status: string;
     winPlayer?: string;
     killedArea?: Position[];
+    killedShip?: Ship;
 } {
     const player = game.players.find((p) => p.id === playerId);
     const opponent = game.players.find((p) => p.id !== playerId);
@@ -159,10 +174,10 @@ export function handleAttack(
 
             if (allKilled) {
                 game.finished = true;
-                return { status: 'killed', winPlayer: playerId, killedArea };
+                return { status: 'killed', winPlayer: playerId, killedArea, killedShip };
             }
 
-            return { status: 'killed', killedArea };
+            return { status: 'killed', killedArea, killedShip };
         }
 
         return { status: 'shot' };

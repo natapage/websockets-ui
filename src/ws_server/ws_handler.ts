@@ -2,7 +2,7 @@ import { db } from '../db/inmemory';
 import { v4 as uuidv4 } from 'uuid';
 import { getWinnersTable, updateWinnersTable } from '../db/winners';
 import { createRoom, joinRoom, getRooms, removeRoom } from '../db/rooms';
-import { addPlayerShips, handleAttack, handleRandomAttack, getGameById } from '../game/game';
+import { addPlayerShips, handleAttack, handleRandomAttack, getGameById, getShipCells, getAroundCells } from '../game/game';
 
 const BOT_NAME = 'Bot';
 const BOT_PASSWORD = 'bot_secret';
@@ -316,8 +316,11 @@ export function handleWSConnection(ws: any, wss: any): void {
 
                     sendAttackMsg(realPlayer.ws, { x, y }, result.status);
 
-                    if (result.status === 'killed' && result.killedArea) {
-                        for (const cell of result.killedArea) {
+                    if (result.status === 'killed' && result.killedShip) {
+                        for (const cell of getShipCells(result.killedShip)) {
+                            sendAttackMsg(realPlayer.ws, cell, 'killed');
+                        }
+                        for (const cell of getAroundCells(result.killedShip)) {
                             sendAttackMsg(realPlayer.ws, cell, 'miss');
                         }
                     }
@@ -377,8 +380,11 @@ export function handleWSConnection(ws: any, wss: any): void {
                             if (realPlayer) {
                                 sendAttackMsg(realPlayer.ws, { x: bx, y: by }, botResult.status);
 
-                                if (botResult.status === 'killed' && botResult.killedArea) {
-                                    for (const cell of botResult.killedArea) {
+                                if (botResult.status === 'killed' && botResult.killedShip) {
+                                    for (const cell of getShipCells(botResult.killedShip)) {
+                                        sendAttackMsg(realPlayer.ws, cell, 'killed');
+                                    }
+                                    for (const cell of getAroundCells(botResult.killedShip)) {
                                         sendAttackMsg(realPlayer.ws, cell, 'miss');
                                     }
                                 }
@@ -442,8 +448,11 @@ export function handleWSConnection(ws: any, wss: any): void {
 
                         sendAttackMsg(p.ws, { x, y }, result.status);
 
-                        if (result.status === 'killed' && result.killedArea) {
-                            for (const cell of result.killedArea) {
+                        if (result.status === 'killed' && result.killedShip) {
+                            for (const cell of getShipCells(result.killedShip)) {
+                                sendAttackMsg(p.ws, cell, 'killed');
+                            }
+                            for (const cell of getAroundCells(result.killedShip)) {
                                 sendAttackMsg(p.ws, cell, 'miss');
                             }
                         }
